@@ -47,11 +47,13 @@ function pingRoute(req, res) {
 }
 
 function updateServer(req, res) {
-    if (selfUpdate()) {
-        res.sendStatus(200);
-    } else {
-        res.sendStatus(403);
-    }
+    selfUpdate(function(err, resp) {
+        if (err) {
+            res.sendStatus(403);
+        } else if (resp){
+            res.sendStatus(200);
+        }
+    })
 }
 
 app.get('/ping', pingRoute);
