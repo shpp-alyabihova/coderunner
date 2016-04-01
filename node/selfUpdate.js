@@ -1,6 +1,6 @@
 "use strict";
 var cp = require('child_process');
-var log = require('./logger');
+var log = require('../modules/logger');
 
 /*
 var config = require('./config.json');
