@@ -16,7 +16,7 @@ var cpOptions = {
     encoding: 'utf8',
     timeout: 0,
     killSignal: 'SIGKILL',
-    cwd: '/home/coderunner'
+    cwd: '/home/ubuntu/coderunner'
 };
 
 var shellExec = function (command, msg) {
