@@ -15,4 +15,7 @@
     "request": "^2.69.0",
     "winston": "2.1.1"
   }
+  "scripts": {
+    "test": "./node_modules/.bin/mocha --recursive -R xunit test/ > test-reports.xml"
+  }
 }
