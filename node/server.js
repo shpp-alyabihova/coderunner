@@ -56,7 +56,7 @@ function updateServer(req, res) {
 
 app.get('/ping', pingRoute);
 
-app.get('update', updateServer);
+app.get('/update', updateServer);
 
 
 // routes
