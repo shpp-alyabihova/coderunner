@@ -1,267 +1,281 @@
-var conf = require ('./../config.json') || {supportedLangs: []};
-var ArgEx = require ('./exceptions/illegalarg').IllegalArgumentException;
-var cp = require ('child_process');
-var fs = require ('fs');
+var conf = require('./../config.json') || {supportedLangs: []};
+var ArgEx = require('./exceptions/illegalarg').IllegalArgumentException;
+var fs = require('fs');
 var mkdirp = require('mkdirp');
-var log = require('./logger');
-
-var cpOptions = {
-    encoding: 'utf8',
-    //timeout: parseInt(conf.userQuotes.taskLifetime) * 1000,
-    killSignal: 'SIGKILL'
-};
-
-var deleteFolderRecursive = function(path) {
-    if( fs.existsSync(path) ) {
-        fs.readdirSync(path).forEach(function(file,index){
-            var curPath = path + "/" + file;
-            if(fs.lstatSync(curPath).isDirectory()) { // recurse
-                deleteFolderRecursive(curPath);
-            } else { // delete file
-                fs.unlinkSync(curPath);
-            }
-        });
-        fs.rmdirSync(path);
-    }
-};
+//var log = require('./logger');
+var DockerExecutor = require('./dockerExecutor');
+var cp = require('child_process');
+var TestCasesRunner = require('./TestCasesRunner');
+var async=require('asyncawait/async');
+var await=require('asyncawait/await');
 
 function DockerRunner () {
-}
 
-DockerRunner.prototype.run = function (options, cb) {
-
-    // creating empty response object
-    var response = {
+    this.response = {
         dockerError: null,
         compilerErrors: null,
         stdout: [],
         stderr: [],
         timestamps: []
     };
+    //this.queue = require("function-queue")();
+
+}
+
+DockerRunner.prototype.run = function (options, cb) {
+    this.log = options.log;
+    this.finalized = false;
 
     if (!options) {
-        finalize (new ArgEx ('you must pass options object as argument'));
+        throw new ArgEx('you must pass options object as argument');
     }
 
-    var opt = {
+    this.opt = {
         sessionId: options.sessionId || null,
         code: options.code || null,
         language: options.language || null,
-        testCases: options.testCases || null,
+        testCases: options.testCases || ["*"],
         callback: cb || null
     };
 
     // validate parameters
-    if (!opt.sessionId) {
-        finalize (new ArgEx ('options.sessionId must be defined'));
-        return;
+    if (!this.opt.sessionId) {
+        throw new ArgEx('options.sessionId must be defined');
     }
-    if (!opt.code) {
-        finalize (new ArgEx ('options.code must be defined'));
-        return;
+    if (!this.opt.code) {
+        throw new ArgEx('options.code must be defined');
     }
-    if (!opt.language) {
-        finalize (new ArgEx ('options.language must be defined'));
-        return;
+    if (!this.opt.language) {
+        throw new ArgEx('options.language must be defined');
     }
-    if (!opt.testCases) {
-        finalize (new ArgEx ('options.testCases must be defined'));
-        return;
+    if (!this.opt.testCases) {
+        throw new ArgEx('options.testCases must be defined');
     }
 
-    var lang = null;
-    //noinspection JSDuplicatedDeclaration
-    log.info('Checking language support');
-    /** @TODO check supported langs by conf.supportedLangs.indexOf(opt.language) !== -1 */
-    for (var i = 0; i < conf.supportedLangs.length; i++) {
-        if (conf.supportedLangs[i] == opt.language) {
-            lang = opt.language;
-            break;
-        }
-    }
-    if (!lang) {
-        var message = 'language ' + opt.language + ' is unsupported, use one of those: ' + String (conf.supportedLangs);
-        finalize (new ArgEx (message));
-        return;
+    this.log.info('Checking language support');
+
+    if (conf.supportedLangs.indexOf(this.opt.language) == -1) {
+        this.log.info('language is not supported');
+        var message = 'language ' + this.opt.language + ' is unsupported, use one of those: ' + String(conf.supportedLangs);
+        throw new ArgEx(message)
+    } else {
+        this.log.info('language ok');
     }
 
     // preparing variables
-    var dockerSharedDir = conf.dockerSharedDir;
-    var sessionDir = dockerSharedDir + "/" + opt.sessionId;
-    var cpu_param = '0';
-    for (var i = 1; i < parseInt(conf.userQuotes.dockerMaxCores); i++) {
-        cpu_param += ', ' + i;
-    }
-    var params = '--name=' + opt.sessionId + ' -m '+conf.userQuotes.dockerMaxMemory+'m --cpuset-cpus "'+cpu_param+'" --net none --rm -v '+sessionDir+':/opt/data';
-    var containerPath = opt.language+"_img";
+    //noinspection JSUnresolvedVariable
+    this.dockerSharedDir = conf.dockerSharedDir;
+    this.sessionDir = this.dockerSharedDir + "/" + this.opt.sessionId;
+    this.imageName = this.opt.language + "_img";
 
-    // preparing shared files
-    try {
+    this.log.info('Create DockerExecutor object.');
+    this.dockerExecutor = new DockerExecutor(this.opt.sessionId, this.imageName, this.log);
 
-        log.info('Preparing shared filesystem tree');
+/*
+    var _this = this;
 
-        mkdirp(sessionDir + '/input', function (err) {
+    this.queue.push(_this.createSharedDirectory.bind(_this));
+    this.queue.push(_this.putCodeIntoDirectory.bind(_this));
+    this.queue.push(_this.compileCode.bind(_this));
+    this.queue.push(_this.runTestCases.bind(_this));
+
+    this.queue.push(function (cb) {
+        _this.finalize();
+        cb();
+    });
+*/
+    var makeTestsAs = async(function (_this) {
+        //console.log("making tests async with ", _this);
+        var _res = await(createSharedDirectoryAw(_this));
+        if (_res)
+            _res = await(putCodeIntoDirectoryAw(_this));
+        if (_res)
+            _res = await(compileCodeAw(_this));
+        if (_res)
+            _res = await(runTestCasesAw(_this));
+        await(deleteFolderRecursiveAw(_this));
+        _this.log.info('Run DockerRunner callback function for ' + _this.opt.sessionId);
+        _this.opt.callback(null, {sessionId: _this.opt.sessionId, response: _this.response});
+    });
+    makeTestsAs(this);
+
+};
+
+
+createSharedDirectoryAw = function (_this) {
+  return function (callback) {
+    _this.log.info('Try to create session directory.');
+    mkdirp(_this.sessionDir + '/input', function (err) {
+        var res=true;
+        if (err) {
+            res=false;
+            _this.log.info('Error on session directory creating');
+        } else {
+            _this.log.info('Session directory created successful');
+        }
+    	callback(null,res);
+    });
+  }
+};
+putCodeIntoDirectoryAw = function (_this) {
+  return function (callback) {
+    _this.log.info('Try put code into directory.');
+    fs.writeFile(_this.sessionDir + "/input/code", _this.opt.code, function (err) {
+        var res=true;
+        if (err) {
+            res=false;
+            _this.log.info('Error on User code has moved to file');
+        } else {
+            _this.log.info('User code has moved to file successful');
+        }
+        callback(null,res);
+    });
+  }
+};
+compileCodeAw = function (_this) {
+  return function (callback) {
+    _this.log.info('Try to compile.');
+    _this.dockerExecutor.startCompile(function (err, stdout, stderr) {
+        stderr = stderr.replace(conf.warningMsg, "").replace("\n", "");
+        _this.log.info("...returned from DockerExecutor back to DockerRunner ");
+	    var res=true;
+        if (stderr) {
+            if (stderr == conf.warningMsg){
+                stderr="";
+	    } else {
+		    res=false;
+	    }
+            _this.response.compilerErrors = stderr;
+        }
+        callback(null,res);
+    });
+  }
+};
+runTestCasesAw = function (_this) {
+  return function (callback) {
+    _this.log.info('Try run testcases.');
+    var testCasesRunner = new TestCasesRunner(_this.log);
+    testCasesRunner.setTestCases(_this.opt.testCases);
+      _this.log.info('Exec testCasesRunner.');
+    testCasesRunner.run(_this.dockerExecutor, function (response) {
+        _this.log.info('...return from testCasesRunner and merge response.');
+        _this.mergeResponse(response);
+        callback(null,true);
+    });
+  }
+};
+deleteFolderRecursiveAw = function (_this) {
+  return function (callback) {
+    _this.log.info('Deleting tmp folder '+ _this.sessionDir);
+    cp.exec ("rm -rf " + _this.sessionDir, function(err) {
+        if (err)
+            _this.log.info('err on del',err);
+        callback(null,true);
+    });
+  }
+};
+
+
+
+DockerRunner.prototype.putCodeIntoDirectory = function (callback) {
+
+    log.info('Try put code into directory.');
+
+    var _this = this;
+    fs.writeFile(_this.sessionDir + "/input/code", _this.opt.code, function (err) {
+        if (err) {
+            throw Error('Cannot write code to docker shared file', err);
+        }
+
+        log.info('User code has moved to file successful');
+
+        callback.call(_this);
+    });
+};
+
+DockerRunner.prototype.createSharedDirectory = function (callback) {
+
+    log.info('Try to create session directory.');
+
+    var _this = this;
+    mkdirp(_this.sessionDir + '/input', function (err) {
+
+        if (err) {
+            throw Error('Cannot create session directory', err);
+        }
+
+        log.info('Session directory created successful');
+
+        cp.exec ("chcon -Rt svirt_sandbox_file_t " + _this.sessionDir, function() {
+
             if (err) {
-                log.info('troubles with creating Testing Session directory');
-                log.error(err);
+                _this.finalize( Error('Can not carefully resolve SElinux permission', err) );
             } else {
-                log.info('Testing Session directory successfully created');
-                log.info('SElinux security fix for shared folder');
-                cp.exec ("chcon -Rt svirt_sandbox_file_t " + sessionDir, function (err) {
-                    if (err) {
-                        log.error('Cannot fix SElinux access >> ', err);
-                    }
-                    log.info('Write code to file on Docker');
-                    fs.writeFile (sessionDir + "/input/code", opt.code, function (err) {
-                        if (err) {
-                            log.error("Error writing code file", err);
-                            return cb (err);
-                        }
-
-                        log.info('Starting to run the user code');
-
-                        try {
-                            executionEntry();
-                        } catch (e) {
-                            log.error('Error when execute user code ', e);
-                            finalize(e);
-                        }
-
-                    });
-                });
+                log.info('SElinux permissions granted');
+                callback.call(_this);
             }
+
         });
 
-        // try {
-        //     fs.accessSync(dockerSharedDir, fs.R_OK);
-        // } catch (e) {
-        //     log.info('Docker shared dir does not exist. Attempting to create.');
-        //     fs.mkdirSync(dockerSharedDir);
-        // }
+    });
+};
 
-        // try {
-        //     fs.accessSync(sessionDir, fs.R_OK);
-        // } catch (e) {
-        //     log.info('Shared session dir does not exist. Attempting to create.');
-        //     fs.mkdirSync(sessionDir);
-        //     fs.mkdirSync(sessionDir + '/input');
-        // }
+DockerRunner.prototype.compileCode = function (callback) {
 
+    log.info('Try to compile.');
 
-    } catch (e) {
-        log.error('Shared filesystem preparation error ', e);
-        finalize(e);
-    }
+    var _this = this;
 
-    //
-    function executionEntry() {
-        // preparing compilation command and callback
-        var compileCommand = 'docker run ' + params + ' ' + containerPath + ' startcompile';
+    this.dockerExecutor.startCompile(function (err, stdout, stderr) {
 
-        var compileCallback = function (err, stdout, stderr) {
+        stderr = stderr.replace(conf.warningMsg, "").replace("\n", "");
 
-            log.info("returned from compile-docker: ", stdout || null, stderr || null, err || null);
+        log.info("...returned from DockerExecutor back to DockerRunner ");
 
-            if (err) {
-                finalize (err);
-                /** @TODO Here is a trouble about compiling the code so we should parse it and if it's any
-                 * docker error we should send message to the admin */
-                return;
-            }
-            /** @TODO remove (stderr.substr(0,7)!="WARNING") */
-            if (stderr && (stderr.substr(0,7)!="WARNING")) {
-                response.compilerErrors = stderr;
-                finalize ();
-            } else {
-                log.info('Code compiled');
-                runTestCases ();
-            }
-        };
-        // execute compilation process
-        log.info("Running docker container: ", compileCommand);
+        if (stderr) {
+            if (stderr == conf.warningMsg)
+                stderr="";
 
-        try {
-            cp.exec (compileCommand, cpOptions, compileCallback);
-        } catch (e) {
-            log.error('Error trying to run docker container');
+            _this.response.compilerErrors = stderr;
         }
 
+        callback.call(_this);
+    });
+};
+
+DockerRunner.prototype.runTestCases = function (callback) {
+
+    log.info('Try run testcases.');
+
+    if (this.response.compilerErrors && this.response.compilerErrors.length > 0){
+        log.info('Compiler error - exit from testcase block.');
+        callback();
+        return;
     }
 
-    // single test case execution function
-    function runTestCases () {
-        // used for sync behaviour
-        var caseData = {
-            timeoutId: null,
-            lastCaseStart: 0,
-            caseIdx: 0,
-            caseLimit: opt.testCases.length
-        };
+    var TestCasesRunner = require('./TestCasesRunner');
+    var testCasesRunner = new TestCasesRunner();
+    testCasesRunner.setTestCases(this.opt.testCases);
 
-        // var params = '--net none -i --rm -m 128MB -v ' + sessionDir + ':/opt/data';
-        params += ' --log-driver=json-file --log-opt max-size=1k ';
-        var command = 'docker run ' + params + ' ' + containerPath + ' start';
+    var _this = this;
 
-        // testcase callback function
-        var testCallback = function (err, stdout, stderr) {
-            log.info ("testcase callback called with the following params: ", err || 'null', stdout || 'null', stderr || 'null');
-            var time = (new Date()).getTime();
-            if (stderr.substr (0, 7) == "WARNING")
-                stderr = "";
+    log.info('Exec testCasesRunner.');
 
-            if (err) {
-                log.error("testcase called with the following error: ",err);
-                if(""+err=="Error: stdout maxBuffer exceeded"){
-                    stderr+=""+err;
-                } else if (err.code==137) {
-                    stderr+="Process killed by timeout.";
-                } else {
-                    stderr+=""+err;
-                }
-            }
+    testCasesRunner.run(this.dockerExecutor, function (response) {
 
-            response.stdout.push (stdout);
-            response.stderr.push (stderr);
-            response.timestamps.push (time - caseData.lastCaseStart);
+        log.info('...return from testCasesRunner and merge response.');
+        _this.mergeResponse(response);
+        callback.call();
 
-            if (caseData.timeoutId) {
-                clearTimeout(caseData.timeoutId);
-                caseData.timeoutId = null;
-            }
+    });
 
-            if (caseData.caseIdx >= opt.testCases.length) {
-                finalize ();
-            } else {
-                runNextCase ();
-            }
-        };
+};
 
-        // prepare and execute testcases
-        function runNextCase () {
-            var testCase = opt.testCases[caseData.caseIdx++];
+DockerRunner.prototype.finalize = function (err) {
 
-            var piped = 'echo -e \"' + testCase.replace(/\n/g, "\\n") + '\" | ' + command;
+    log.info('finalizing DockerRunner.');
 
-            log.info('Piped command to run testcase: '+piped);
-            // saving execution start time
-            caseData.lastCaseStart = (new Date()).getTime();
-
-            // executing testcase
-            cp.exec (piped, cpOptions, testCallback);
-
-            var cmd = 'docker kill ' + opt.sessionId;
-            //noinspection JSUnresolvedVariable
-            caseData.timeoutId = setTimeout (function () {
-                cp.exec (cmd);
-                log.info("Time is out. Kill container: ", cmd);
-            }, parseInt(conf.userQuotes.taskLifetime) * 1000);
-        }
-
-        runNextCase ();
-    }
-
-    // function to finalize testing from callback
-    function finalize (err) {
+    if (!this.finalized) {
 
         // logging errors
         if (err) {
@@ -269,17 +283,45 @@ DockerRunner.prototype.run = function (options, cb) {
         }
 
         // delete temporary folders
-        deleteFolderRecursive(sessionDir);
+        log.info('Remove tmp folders. '+this.sessionDir);
+        this.deleteFolderRecursive(this.sessionDir);
 
         // call callback function
-        if (opt.callback) {
-            opt.callback (err, {sessionId: opt.sessionId, response: response});
+        if (this.opt.callback) {
+            log.info('Run DockerRunner callback function for ' + this.opt.sessionId);
+            this.opt.callback(err, {sessionId: this.opt.sessionId, response: this.response});
         } else {
-            log.error ('No callback for task');
+            log.error('No callback for task');
         }
 
+        this.finalized = true;
+    } else {
+        log.info('...already finalized');
     }
+};
 
+DockerRunner.prototype.mergeResponse = function (response) {
+    var _this = this;
+    for (var property in response) {
+        if (response.hasOwnProperty(property) && _this.response.hasOwnProperty(property)) {
+            this.response[property] = response[property];
+        }
+    }
+};
+
+DockerRunner.prototype.deleteFolderRecursive = function (path) {
+    var _this = this;
+    if (fs.existsSync(path)) {
+        fs.readdirSync(path).forEach(function (file) {
+            var curPath = path + "/" + file;
+            if (fs.lstatSync(curPath).isDirectory()) { // recurse
+                _this.deleteFolderRecursive(curPath);
+            } else { // delete file
+                fs.unlinkSync(curPath);
+            }
+        });
+        fs.rmdirSync(path);
+    }
 };
 
 module.exports = DockerRunner;

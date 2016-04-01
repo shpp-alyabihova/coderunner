@@ -1,61 +1,189 @@
+'use strict';
+
 /**
  * Created by Vladimir on 11.02.2016.
  */
-module.exports = RunnerQueue;
+var DockerRunner = require('./dockerRunner');
+var Promise = require('bluebird');
+var async = require('asyncawait/async');
+var await = require('asyncawait/await');
 
-function RunnerQueue () {
-    this.arrPendingTasks = [];
-    this.arrWorkingTasks = [];
-    this.workingTasksCounter = 0;
+class RunnerQueue {
+    constructor() {
+        this.arrPendingTasks = [];
+        this.workingTasksCounter = 0;
 
-    // remove this when all tests are finished
-    //var DockerRunner = require('./testExec3');
-    var DockerRunner = require ('./dockerRunner');
-    this.dockerRunner = new DockerRunner ();
+        var config = require('../config.json');
+        this.maxWorkingTaskNumber = config.MaxWorkingTaskNumber;
+    }
 
-    var config = require ('../config.json');
-    this.maxWorkingTaskNumber = config.MaxWorkingTaskNumber;
+    pushAsync(taskObj) {
+        var _this = this;
+        return function (callbackFunction) {
+            _this.push(taskObj, callbackFunction);
+        };
+    }
+
+    push(taskObj, callbackFunction) {
+        if (this.workingTasksCounter < this.maxWorkingTaskNumber) {
+            taskObj.log.info("Queue of working tasks has free places.");
+            this.sendTaskToDockerRunner(taskObj, callbackFunction);
+        } else {
+            this.arrPendingTasks.push({task: taskObj, cb: callbackFunction});
+            taskObj.log.info("Queue is full. Task added to pending list " + taskObj.sessionId);
+        }
+    }
+
+    sendTaskToDockerRunner(taskObj, callbackFunction) {
+        var self = this;
+        this.workingTasksCounter++;
+        var asCode = async((task) => {
+            var dockerRunner = new DockerRunner();
+            var dockerRunnerAsync = Promise.promisifyAll(dockerRunner);
+            var result = await(dockerRunnerAsync.runAsync(task));
+            var sessionId = result.sessionId;
+            var answerObj = result.response;
+
+            task.log.info("...task solution " + sessionId + " received from docker-manager to coderunnerQueue");
+
+            self.workingTasksCounter--;
+
+            if ((self.workingTasksCounter < self.maxWorkingTaskNumber) && (self.arrPendingTasks.length > 0)) {
+                var taskToSolve = self.arrPendingTasks.shift();
+                self.sendTaskToDockerRunner(taskToSolve.task, taskToSolve.cb);
+            }
+            task.log.info("Sending answer " + sessionId + " to API-server");
+            return answerObj;
+        });
+
+        asCode(taskObj)
+        .then((res) => {
+            callbackFunction(null, res);
+        })
+        .catch((err) => {
+            callbackFunction(err, null);
+        });
+    }
 }
 
-RunnerQueue.prototype.push = function (taskObj, callbackFunction) {
-    if (this.workingTasksCounter < this.maxWorkingTaskNumber) {
-        this.sendTaskToDockerRunner (taskObj, callbackFunction);
-    } else {
-        this.arrPendingTasks.push ({task: taskObj, cb: callbackFunction})
-        console.log ("Task added to pending list", taskObj);
-    }
-};
+module.exports = RunnerQueue;
 
-RunnerQueue.prototype.sendTaskToDockerRunner = function (taskObj, callbackFunction) {
-    var self = this;
-    //var taskPos=this.arrWorkingTasks.length;
-
-    var returnFunc = function (err, result) {
-        var sessionId=result.sessionId, answerObj=result.response;
-        console.log ("Task solution received from docker-manager", sessionId, answerObj);
-        //var callbackFunc = self.arrWorkingTasks[taskPos].cb;
-        //self.arrWorkingTasks.splice (taskPos, 1);
-        self.workingTasksCounter--;
-
-        if ((self.workingTasksCounter < self.maxWorkingTaskNumber) && (self.arrPendingTasks.length > 0)) {
-            var taskToSolve = self.arrPendingTasks.shift ();
-            self.sendTaskToDockerRunner (taskToSolve.task, taskToSolve.cb);
-        }
-        console.log("send to server answer: ", answerObj);
-        callbackFunction (err, answerObj);
-    };
-
-    console.log ("Task sent to docker-manager", taskObj);
-    this.dockerRunner.run (taskObj, returnFunc);
-    this.workingTasksCounter++;
-};
-
-// remove this when all tests are finished
-//var dq=new RunnerQueue();
-//dq.push({sessionId: "111"}, alldone);
-//dq.push({sessionId: "222"}, alldone);
-//dq.push({sessionId: "333"}, alldone);
+//function RunnerQueue () {
+//    this.arrPendingTasks = [];
+//    this.workingTasksCounter = 0;
 //
-//function alldone(answ){
-//    console.log("That's all.", answ)
+//    var config = require ('../config.json');
+//    this.maxWorkingTaskNumber = config.MaxWorkingTaskNumber;
 //}
+
+//RunnerQueue.prototype.pushAsync = function (taskObj) {
+//    var _this = this;
+//    return function (callbackFunction) {
+//        _this.push(taskObj, callbackFunction);
+//    }
+//};
+
+//RunnerQueue.prototype.push = function (taskObj, callbackFunction) {
+//    if (this.workingTasksCounter < this.maxWorkingTaskNumber) {
+//        taskObj.log.info("Queue of working tasks has free places.");
+//        this.sendTaskToDockerRunner (taskObj, callbackFunction);
+//    } else {
+//        this.arrPendingTasks.push({task: taskObj, cb: callbackFunction});
+//        taskObj.log.info("Queue is full. Task added to pending list " + taskObj.sessionId);
+//    }
+//};
+
+
+//RunnerQueue.prototype.sendTaskToDockerRunner = function (taskObj, callbackFunction) {
+//    var self = this;
+
+/*
+ var returnFunc = function (err, result) {
+ var sessionId=result.sessionId, answerObj=result.response;
+
+ taskObj.log.info("...task solution " + sessionId + " received from docker-manager to coderunnerQueue");
+
+ self.workingTasksCounter--;
+
+ if ((self.workingTasksCounter < self.maxWorkingTaskNumber) && (self.arrPendingTasks.length > 0)) {
+ var taskToSolve = self.arrPendingTasks.shift ();
+ self.sendTaskToDockerRunner (taskToSolve.task, taskToSolve.cb);
+ }
+
+ taskObj.log.info("Sending answer " + sessionId + " to API-server");
+ callbackFunction (err, answerObj);
+ };
+
+ taskObj.log.info("Sending task to DockerRunner", taskObj);
+
+ var dockerRunner = new DockerRunner();
+ dockerRunner.run(taskObj, returnFunc);
+ this.workingTasksCounter++;
+ */
+
+// asyncawait
+/*
+ this.workingTasksCounter++;
+
+ var asCode = async(function (task) {
+ var dockerRunner = new DockerRunner();
+ var dockerRunnerAsync = Promise.promisifyAll(dockerRunner);
+
+ var result = await(dockerRunnerAsync.runAsync(task));
+
+ var sessionId = result.sessionId;
+ var answerObj = result.response;
+
+ task.log.info("...task solution " + sessionId + " received from docker-manager to coderunnerQueue");
+
+ self.workingTasksCounter--;
+
+ if ((self.workingTasksCounter < self.maxWorkingTaskNumber) && (self.arrPendingTasks.length > 0)) {
+ var taskToSolve = self.arrPendingTasks.shift();
+ self.sendTaskToDockerRunner(taskToSolve.task, taskToSolve.cb);
+ }
+
+ task.log.info("Sending answer " + sessionId + " to API-server");
+ return answerObj;
+ });
+
+ asCode(taskObj)
+ .then(function (res) {
+ callbackFunction(null, res);
+ })
+ .catch(function (err) {
+ callbackFunction(err, null);
+ });
+ */
+
+// promises
+/*
+ this.workingTasksCounter++;
+
+ var dockerRunner = new DockerRunner();
+ var dockerRunnerAsync=Promise.promisifyAll(dockerRunner);
+ dockerRunnerAsync.runAsync(taskObj)
+ .then(function(result){
+ var sessionId=result.sessionId;
+ var answerObj=result.response;
+
+ taskObj.log.info("...task solution " + sessionId + " received from docker-manager to coderunnerQueue");
+
+ self.workingTasksCounter--;
+
+ if ((self.workingTasksCounter < self.maxWorkingTaskNumber) && (self.arrPendingTasks.length > 0)) {
+ var taskToSolve = self.arrPendingTasks.shift ();
+ self.sendTaskToDockerRunner (taskToSolve.task, taskToSolve.cb);
+ }
+
+ taskObj.log.info("Sending answer " + sessionId + " to API-server");
+ return answerObj;
+ })
+ .then (function(result){
+ callbackFunction(null, result);
+ })
+ .catch  (function(err){
+ callbackFunction(err, null);
+ })
+ */
+//};

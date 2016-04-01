@@ -9,16 +9,17 @@ function validate(testCases) {
         return sendResult(logs);
     }
 
-    var regExp = /[\x00-\x0A\x0C\x0E-\x1F\x7F-\xFF]/; // pattern for ascii symbols (0-10, 12, 14-31, 127-255)
+    var regExp = /[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\xFF]/; // pattern for ascii symbols (0-8, 11-12, 14-31, 127-255)
     //restricts length and use of special symbols in every test case
     for (var i = 0; i < testCases.length; i++) {
         //convert test case from UTF-8 to ASCII
         var convTestCase = convert(testCases[i], { in: 'utf8', out: 'binary' });
         var pos = -1;
+        var j = i;
         if (convTestCase.length > config.quotes.maxTestCasesLength) {
-            addLog(logs, 1, "Test case #" + ++i, "The characters limit exceeded");
+            addLog(logs, 1, "Test case #" + ++j, "The characters limit exceeded");
         } else if ((pos = convTestCase.search(regExp)) != -1) {
-            addLog(logs, 2, "Test case #" + ++i, "contains forbidden symbols");
+            addLog(logs, 2, "Test case #" + ++j, "contains forbidden symbols");
         }
     }
     return sendResult(logs);
