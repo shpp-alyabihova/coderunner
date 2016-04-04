@@ -14,7 +14,6 @@ var queue = new Queue();
 var uri = "http://nonscire.pp.ua/request-logger/logme.php";
 var sendRequest = require('./sendRequest.js');
 var selfVerification = require('./selfVerification');
-var selfUpdate = require('./selfUpdate');
 var async = require('asyncawait/async');
 var await = require('asyncawait/await');
 
@@ -46,19 +45,8 @@ function pingRoute(req, res) {
             .catch(console.log.bind(console));
 }
 
-function updateServer(req, res) {
-    selfUpdate(function(err, resp) {
-        if (err) {
-            res.sendStatus(403);
-        } else if (resp){
-            res.sendStatus(200);
-        }
-    })
-}
 
 app.get('/ping', pingRoute);
-
-app.get('/update', updateServer);
 
 
 // routes
