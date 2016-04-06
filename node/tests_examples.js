@@ -2,6 +2,7 @@
 var tests = [];
 var key = "key";
 
+var param_test = 0;
 test = {desc: "simple adding java",
     lang: "java",
     req: {
